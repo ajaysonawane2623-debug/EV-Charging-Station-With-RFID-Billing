@@ -160,7 +160,7 @@ All information such as charging status, energy usage, and billing amount is dis
 ---
 
 ## 📷 Output / Results
-![Circuit](images/circuit.png)
+![Circuit](circuit.png)
 
 👉 This shows real-time system output including:
 - RFID scanning
