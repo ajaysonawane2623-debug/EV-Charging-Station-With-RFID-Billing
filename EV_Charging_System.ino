@@ -1,198 +1,98 @@
+/*
 =====================================================
- *  Fully Automated EV Charging Station
- *  with RFID Based Billing System
- * =====================================================
- *  Platform   : Arduino UNO (ATmega328P)
- *  RFID       : RC522 (SPI)
- *  Sensor     : ACS712 Current Sensor
- *  Display    : 16x2 LCD via I2C
- *  Author     : Embedded Systems Project
- *  Year       : 2025
- * =====================================================
- *
- *  PIN CONNECTIONS:
- *  RC522  --> Arduino
- *  SDA    --> D10
- *  SCK    --> D13
- *  MOSI   --> D11
- *  MISO   --> D12
- *  RST    --> D9
- *  VCC    --> 3.3V
- *  GND    --> GND
- *
- *  LCD (I2C)  --> Arduino
- *  SDA        --> A4
- *  SCL        --> A5
- *  VCC        --> 5V
- *  GND        --> GND
- *
- *  ACS712     --> Arduino
- *  AOUT       --> A0
- *  VCC        --> 5V
- *  GND        --> GND
- *
- *  Relay      --> D7
- *  Green LED  --> D6
- *  Red LED    --> D5
- *  Buzzer     --> D4
- * =====================================================
- *
- *  Required Libraries:
- *  - MFRC522           (RFID RC522)
- *  - LiquidCrystal_I2C (LCD Display)
- *  - Wire              (Built-in)
- *  - SPI               (Built-in)
- * =====================================================
- */
+ Fully Automated EV Charging Station
+ RFID Based Billing System
+=====================================================
+ Platform   : Arduino UNO
+ RFID       : RC522
+ Sensor     : ACS712
+ Display    : 16x2 LCD I2C
+=====================================================
+*/
 
 #include <SPI.h>
 #include <MFRC522.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-// =====================================================
-// PIN DEFINITIONS
-// =====================================================
-#define SS_PIN         10   // RC522 SDA/SS
-#define RST_PIN         9   // RC522 RST
-#define RELAY_PIN       7   // Relay control
-#define GREEN_LED       6   // Charging active indicator
-#define RED_LED         5   // Idle / Access denied
-#define BUZZER          4   // Audio alert
-#define CURRENT_SENSOR A0   // ACS712 analog output
+// ---------------- PIN CONFIG ----------------
+#define SS_PIN 10
+#define RST_PIN 9
+#define RELAY_PIN 7
+#define GREEN_LED 6
+#define RED_LED 5
+#define BUZZER 4
+#define CURRENT_SENSOR A0
 
-// =====================================================
-// OBJECT INITIALIZATION
-// =====================================================
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // I2C address 0x27
-MFRC522 rfid(SS_PIN, RST_PIN);       // RFID instance
+// ---------------- OBJECTS ----------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+MFRC522 rfid(SS_PIN, RST_PIN);
 
-// =====================================================
-// REGISTERED RFID UIDs
-// Add your RFID card UIDs here
-// To find UID: upload, open Serial Monitor,
-// tap card and note the UID printed
-// =====================================================
+// ---------------- USERS ----------------
 byte registeredUID[][4] = {
-  {0xA1, 0xB2, 0xC3, 0xD4},   // User 1 - Rahul
-  {0x11, 0x22, 0x33, 0x44},   // User 2 - Priya
-  // Add more users below:
-  // {0xXX, 0xXX, 0xXX, 0xXX},   // User 3 - Name
+  {0xA1, 0xB2, 0xC3, 0xD4},
+  {0x11, 0x22, 0x33, 0x44}
 };
+
 String userNames[] = {"Rahul", "Priya"};
-int totalUsers = 2;  // Update this when adding more users
+int totalUsers = 2;
 
-// =====================================================
-// BILLING CONFIGURATION
-// =====================================================
-float ratePerUnit    = 8.0;    // Rs. per kWh (change as needed)
-float supplyVoltage  = 230.0;  // AC supply voltage in Volts
+// ---------------- BILLING ----------------
+float ratePerUnit = 8.0;
+float supplyVoltage = 230.0;
 
-// =====================================================
-// SESSION VARIABLES
-// =====================================================
-bool chargingActive    = false;
-float totalEnergy      = 0.0;   // kWh consumed
-float totalBill        = 0.0;   // Rs. bill amount
-unsigned long sessionStart = 0; // Session start time (ms)
-int currentUser        = -1;    // Currently charging user index
+// ---------------- VARIABLES ----------------
+bool chargingActive = false;
+float totalEnergy = 0;
+float totalBill = 0;
+unsigned long sessionStart = 0;
+int currentUser = -1;
 
-// =====================================================
-// SETUP
-// =====================================================
+// ---------------- SETUP ----------------
 void setup() {
   Serial.begin(9600);
   SPI.begin();
   rfid.PCD_Init();
 
-  // LCD init
   lcd.init();
   lcd.backlight();
 
-  // Pin modes
-  pinMode(RELAY_PIN,  OUTPUT);
-  pinMode(GREEN_LED,  OUTPUT);
-  pinMode(RED_LED,    OUTPUT);
-  pinMode(BUZZER,     OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
 
-  // Initial state
-  digitalWrite(RELAY_PIN, LOW);   // Charger OFF
-  digitalWrite(GREEN_LED, LOW);   // Green OFF
-  digitalWrite(RED_LED,  HIGH);   // Red ON (idle)
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RED_LED, HIGH);
 
-  // Welcome screen
-  lcd.setCursor(0, 0);
-  lcd.print("EV Charging Sys");
-  lcd.setCursor(0, 1);
-  lcd.print("Initializing...");
-  delay(2000);
-
-  lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("EV Charging Sys");
   lcd.setCursor(0, 1);
   lcd.print("Tap Card...");
-
-  Serial.println("=================================");
-  Serial.println("EV Charging Station Ready");
-  Serial.println("Waiting for RFID card...");
-  Serial.println("=================================");
 }
 
-// =====================================================
-// MAIN LOOP
-// =====================================================
+// ---------------- LOOP ----------------
 void loop() {
-  // Continuously update display during charging
-  if (chargingActive) {
-    updateChargingDisplay();
-  }
 
-  // Check if new RFID card is present
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
+  if (chargingActive) updateDisplay();
+
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
     return;
-  }
 
-  // Print scanned UID to Serial Monitor (for debugging)
-  Serial.print("Card UID: ");
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
-    Serial.print(rfid.uid.uidByte[i], HEX);
-  }
-  Serial.println();
-
-  // Verify UID
-  int userIndex = verifyUID();
+  int userIndex = checkUID();
 
   if (userIndex >= 0) {
-    // Valid user
-    if (!chargingActive) {
-      startCharging(userIndex);         // Start new session
-    } else if (userIndex == currentUser) {
-      stopCharging();                   // End current session
-    } else {
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Another Session");
-      lcd.setCursor(0, 1);
-      lcd.print("Already Active!");
-      beep(2, 100);
-      delay(2000);
-    }
+    if (!chargingActive) startCharging(userIndex);
+    else if (userIndex == currentUser) stopCharging();
   } else {
-    accessDenied();   // Unknown card
+    accessDenied();
   }
 
   rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-  delay(1000);
 }
 
-// =====================================================
-// VERIFY UID AGAINST REGISTERED USERS
-// Returns user index if found, -1 if not found
-// =====================================================
-int verifyUID() {
+// ---------------- UID CHECK ----------------
+int checkUID() {
   for (int i = 0; i < totalUsers; i++) {
     bool match = true;
     for (int j = 0; j < 4; j++) {
@@ -206,183 +106,99 @@ int verifyUID() {
   return -1;
 }
 
-// =====================================================
-// START CHARGING SESSION
-// AUTO: Relay ON, Green LED ON, Timer starts
-// =====================================================
-void startCharging(int userIndex) {
-  currentUser    = userIndex;
+// ---------------- START ----------------
+void startCharging(int user) {
+  currentUser = user;
   chargingActive = true;
-  totalEnergy    = 0.0;
-  totalBill      = 0.0;
-  sessionStart   = millis();
+  sessionStart = millis();
 
-  // AUTO relay ON — no human needed
   digitalWrite(RELAY_PIN, HIGH);
   digitalWrite(GREEN_LED, HIGH);
-  digitalWrite(RED_LED,   LOW);
-
-  beep(1, 300);  // Single beep confirmation
+  digitalWrite(RED_LED, LOW);
 
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Hi, " + userNames[userIndex]);
+  lcd.print("Hi ");
+  lcd.print(userNames[user]);
   lcd.setCursor(0, 1);
-  lcd.print("Charging Start!");
-  delay(2000);
+  lcd.print("Charging ON");
 
-  Serial.println("---------------------------------");
-  Serial.println("Session Started: " + userNames[userIndex]);
-  Serial.println("---------------------------------");
+  beep(1);
 }
 
-// =====================================================
-// STOP CHARGING SESSION
-// AUTO: Relay OFF, Bill calculated and displayed
-// =====================================================
+// ---------------- STOP ----------------
 void stopCharging() {
   chargingActive = false;
 
-  // AUTO relay OFF — no human needed
   digitalWrite(RELAY_PIN, LOW);
   digitalWrite(GREEN_LED, LOW);
-  digitalWrite(RED_LED,  HIGH);
+  digitalWrite(RED_LED, HIGH);
 
-  beep(2, 150);  // Double beep — session end
-
-  // Calculate session duration
-  unsigned long duration = (millis() - sessionStart) / 1000;
-  int mins = duration / 60;
-  int secs = duration % 60;
-
-  // Display final bill
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Energy:");
-  lcd.print(totalEnergy, 3);
-  lcd.print("kWh");
-  lcd.setCursor(0, 1);
-  lcd.print("Bill: Rs.");
-  lcd.print(totalBill, 2);
-  delay(4000);
+  lcd.print("Bill: Rs ");
+  lcd.print(totalBill);
 
-  // Display session duration
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Time: ");
-  lcd.print(mins);
-  lcd.print("m ");
-  lcd.print(secs);
-  lcd.print("s");
-  lcd.setCursor(0, 1);
-  lcd.print("Thank You!");
   delay(3000);
 
-  Serial.println("---------------------------------");
-  Serial.println("Session Ended: " + userNames[currentUser]);
-  Serial.print("Energy: "); Serial.print(totalEnergy, 4); Serial.println(" kWh");
-  Serial.print("Bill  : Rs."); Serial.println(totalBill, 2);
-  Serial.print("Time  : "); Serial.print(mins); Serial.print("m "); Serial.print(secs); Serial.println("s");
-  Serial.println("---------------------------------");
-
   currentUser = -1;
-
-  // Return to idle screen
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("EV Charging Sys");
-  lcd.setCursor(0, 1);
   lcd.print("Tap Card...");
 }
 
-// =====================================================
-// UPDATE CHARGING DISPLAY (called every loop)
-// AUTO: Reads current, calculates power, energy, bill
-// =====================================================
-void updateChargingDisplay() {
+// ---------------- DISPLAY ----------------
+void updateDisplay() {
   float current = readCurrent();
-  float power   = supplyVoltage * current;
+  float power = supplyVoltage * current;
 
-  unsigned long elapsed = millis() - sessionStart;
-  float hours = elapsed / 3600000.0;
+  float hours = (millis() - sessionStart) / 3600000.0;
 
-  // Accumulate energy and bill
-  totalEnergy = (power * hours) / 1000.0;  // Wh to kWh
-  totalBill   = totalEnergy * ratePerUnit;
+  totalEnergy = (power * hours) / 1000.0;
+  totalBill = totalEnergy * ratePerUnit;
 
-  // Live display update
   lcd.clear();
-  lcd.setCursor(0, 0);
   lcd.print("I:");
   lcd.print(current, 2);
-  lcd.print("A P:");
-  lcd.print((int)power);
-  lcd.print("W");
+  lcd.print("A");
 
   lcd.setCursor(0, 1);
-  lcd.print("E:");
-  lcd.print(totalEnergy, 3);
-  lcd.print(" Rs:");
+  lcd.print("Bill:");
   lcd.print(totalBill, 1);
-
-  // Serial log
-  Serial.print("Current: "); Serial.print(current, 2); Serial.print("A | ");
-  Serial.print("Power: ");   Serial.print(power, 1);   Serial.print("W | ");
-  Serial.print("Energy: ");  Serial.print(totalEnergy, 4); Serial.print("kWh | ");
-  Serial.print("Bill: Rs."); Serial.println(totalBill, 2);
 
   delay(1000);
 }
 
-// =====================================================
-// READ CURRENT FROM ACS712 (5A version)
-// Change 0.185 to 0.100 for 20A version
-// =====================================================
+// ---------------- CURRENT ----------------
 float readCurrent() {
-  long sum = 0;
-  for (int i = 0; i < 100; i++) {
+  float sum = 0;
+  for (int i = 0; i < 50; i++) {
     sum += analogRead(CURRENT_SENSOR);
     delay(1);
   }
-  float avgVal  = sum / 100.0;
-  float voltage = (avgVal / 1023.0) * 5.0;
-  float current = (voltage - 2.5) / 0.185;  // ACS712-5A: 185mV/A
-  if (current < 0.05) current = 0;           // Ignore noise
+
+  float voltage = (sum / 50.0) * (5.0 / 1023.0);
+  float current = (voltage - 2.5) / 0.185;
+
+  if (current < 0) current = 0;
   return current;
 }
 
-// =====================================================
-// ACCESS DENIED — Unknown card rejected automatically
-// =====================================================
+// ---------------- ACCESS DENIED ----------------
 void accessDenied() {
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Access Denied!");
-  lcd.setCursor(0, 1);
-  lcd.print("Invalid Card");
+  lcd.print("Access Denied");
 
-  beep(3, 100);  // Triple beep alert
-  delay(2000);
+  beep(3);
+  delay(1500);
 
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("EV Charging Sys");
-  lcd.setCursor(0, 1);
   lcd.print("Tap Card...");
-
-  Serial.println("ACCESS DENIED — Unknown card tapped!");
 }
 
-// =====================================================
-// BUZZER FUNCTION
-// times   = number of beeps
-// duration = beep length in ms
-// =====================================================
-void beep(int times, int duration) {
+// ---------------- BEEP ----------------
+void beep(int times) {
   for (int i = 0; i < times; i++) {
     digitalWrite(BUZZER, HIGH);
-    delay(duration);
+    delay(150);
     digitalWrite(BUZZER, LOW);
-    if (i < times - 1) delay(120);
+    delay(100);
   }
 }
